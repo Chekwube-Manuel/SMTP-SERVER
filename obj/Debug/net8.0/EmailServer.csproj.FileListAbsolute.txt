@@ -1,0 +1,7 @@
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\EmailServer.csproj.AssemblyReference.cache
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\rpswa.dswa.cache.json
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\EmailServer.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\EmailServer.AssemblyInfoInputs.cache
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\EmailServer.AssemblyInfo.cs
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\EmailServer.csproj.CoreCompileInputs.cache
+C:\Users\NWCS\Desktop\SMTP_SERVER\obj\Debug\net8.0\EmailServer.MvcApplicationPartsAssemblyInfo.cache
