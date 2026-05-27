@@ -13,7 +13,7 @@ This project is a starter C# ASP.NET Core email service with multi-tenant suppor
 
 ## Run locally
 
-1. Install .NET 8 SDK
+1. Install .NET 10 SDK
 2. Open a terminal in `c:\Users\NWCS\Desktop\SMTP_SERVER`
 3. Run:
 

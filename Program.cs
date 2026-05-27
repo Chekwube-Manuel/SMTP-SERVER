@@ -13,6 +13,7 @@ builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IEmailSender, EmailSender>();
 builder.Services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
 builder.Services.AddScoped<IQuotaService, QuotaService>();
+builder.Services.AddScoped<IDomainVerificationService, DomainVerificationService>();
 
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
 
@@ -39,29 +40,65 @@ app.MapGet("/api/tenants/{tenantId}", async (Guid tenantId, ITenantService servi
     return tenant is not null ? Results.Ok(tenant) : Results.NotFound();
 });
 
+app.MapGet("/api/tenants/{tenantId}/verification", async (Guid tenantId, IDomainVerificationService verificationService) =>
+{
+    var info = await verificationService.GetVerificationInfoAsync(tenantId);
+    return info is not null ? Results.Ok(info) : Results.NotFound();
+});
+
+app.MapPost("/api/tenants/{tenantId}/verification/verify", async (Guid tenantId, IDomainVerificationService verificationService) =>
+{
+    var verified = await verificationService.VerifyDomainAsync(tenantId);
+    return verified ? Results.Ok(new { status = "verified" }) : Results.BadRequest(new { status = "failed", message = "DNS record not found or token mismatch." });
+});
+
 app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApiKeyValidator apiKeyValidator, ITenantService tenantService, IEmailSender sender, IQuotaService quotaService, EmailServerContext db) =>
 {
+    if (request.To is null)
+    {
+        return Results.BadRequest(new { message = "At least one recipient is required." });
+    }
+
+    var recipients = request.To
+        .Where(recipient => !string.IsNullOrWhiteSpace(recipient))
+        .Select(recipient => recipient.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    if (recipients.Count == 0)
+    {
+        return Results.BadRequest(new { message = "At least one recipient is required." });
+    }
+
     if (!http.Request.Headers.TryGetValue("X-API-Key", out var apiKey))
     {
         return Results.Unauthorized();
     }
 
-    var tenant = await apiKeyValidator.ValidateAsync(apiKey);
+    var tenant = await apiKeyValidator.ValidateAsync(apiKey.ToString());
     if (tenant is null)
     {
         return Results.Unauthorized();
     }
 
-    if (!await quotaService.CanSendAsync(tenant))
+    if (!await quotaService.CanSendAsync(tenant, recipients.Count))
     {
         return Results.StatusCode(429);
+    }
+
+    var sendRequest = request with { To = recipients };
+
+    var sendResult = await sender.SendAsync(tenant, sendRequest);
+    if (!sendResult)
+    {
+        return Results.StatusCode(502);
     }
 
     var message = new EmailMessage
     {
         TenantId = tenant.Id,
         From = request.From,
-        To = request.To,
+        To = recipients,
         Subject = request.Subject,
         Body = request.Body,
         CreatedAt = DateTime.UtcNow
@@ -70,14 +107,8 @@ app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApi
     await db.EmailMessages.AddAsync(message);
     await db.SaveChangesAsync();
 
-    var sendResult = await sender.SendAsync(tenant, request);
-    if (!sendResult)
-    {
-        return Results.StatusCode(502);
-    }
-
     await quotaService.RecordSendAsync(tenant, message);
-    return Results.Ok(new { message = "queued", tenantId = tenant.Id, messageId = message.Id });
+    return Results.Ok(new { message = "sent", tenantId = tenant.Id, messageId = message.Id });
 });
 
 app.MapGet("/api/usage/{tenantId}", async (Guid tenantId, ITenantService service, IQuotaService quotaService) =>
@@ -97,6 +128,3 @@ app.MapGet("/api/tenants", async (ITenantService service) => await service.GetTe
 app.Run();
 
 public partial class Program { }
-
-record TenantCreateRequest(string Name, string Domain, int MaxMessagesPerDay);
-record EmailSendRequest(string From, List<string> To, string Subject, string Body);

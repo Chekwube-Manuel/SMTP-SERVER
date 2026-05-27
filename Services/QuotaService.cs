@@ -13,14 +13,19 @@ namespace EmailServer.Services
             _db = db;
         }
 
-        public async Task<bool> CanSendAsync(Tenant tenant)
+        public async Task<bool> CanSendAsync(Tenant tenant, int recipientCount)
         {
+            if (recipientCount <= 0)
+            {
+                return false;
+            }
+
             var today = DateTime.UtcNow.Date;
             var count = await _db.SendEvents
                 .Where(e => e.TenantId == tenant.Id && e.SentAt >= today)
                 .CountAsync();
 
-            return count < tenant.MaxMessagesPerDay;
+            return count + recipientCount <= tenant.MaxMessagesPerDay;
         }
 
         public async Task RecordSendAsync(Tenant tenant, EmailMessage message)

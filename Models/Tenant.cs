@@ -14,6 +14,12 @@ namespace EmailServer.Models
         [Required]
         public string ApiKey { get; set; } = string.Empty;
         public int MaxMessagesPerDay { get; set; }
+        public bool DomainVerified { get; set; }
+        public DateTime? DomainVerifiedAt { get; set; }
+        public string VerificationToken { get; set; } = string.Empty;
+        public string DkimSelector { get; set; } = string.Empty;
+        public string DkimPublicKey { get; set; } = string.Empty;
+        public string DkimPrivateKey { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public ICollection<EmailMessage> Messages { get; set; } = new List<EmailMessage>();
         public ICollection<SendEvent> SendEvents { get; set; } = new List<SendEvent>();
