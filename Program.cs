@@ -125,6 +125,30 @@ app.MapGet("/api/usage/{tenantId}", async (Guid tenantId, ITenantService service
     return Results.Ok(usage);
 });
 
+app.MapGet("/api/queue", async (EmailServerContext db) =>
+{
+    var messages = await db.QueuedEmails
+        .OrderByDescending(message => message.CreatedAt)
+        .Take(100)
+        .Select(message => new
+        {
+            message.Id,
+            message.TenantId,
+            message.From,
+            Recipients = message.RecipientsSerialized,
+            message.Status,
+            message.AttemptCount,
+            message.LastAttemptAt,
+            message.NextAttemptAt,
+            message.SentAt,
+            message.LastError,
+            message.CreatedAt
+        })
+        .ToListAsync();
+
+    return Results.Ok(messages);
+});
+
 app.MapGet("/api/tenants", async (ITenantService service) => await service.GetTenantsAsync());
 
 app.Run();

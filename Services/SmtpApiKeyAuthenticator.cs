@@ -23,7 +23,13 @@ namespace EmailServer.Services
             var apiKeyValidator = scope.ServiceProvider.GetRequiredService<IApiKeyValidator>();
             var tenant = await apiKeyValidator.ValidateAsync(password);
 
-            return tenant is not null;
+            if (tenant is null)
+            {
+                return false;
+            }
+
+            context.Properties["TenantId"] = tenant.Id;
+            return true;
         }
     }
 }

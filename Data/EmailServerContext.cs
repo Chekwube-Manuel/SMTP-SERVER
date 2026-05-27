@@ -12,6 +12,7 @@ namespace EmailServer.Data
 
         public DbSet<Tenant> Tenants => Set<Tenant>();
         public DbSet<EmailMessage> EmailMessages => Set<EmailMessage>();
+        public DbSet<QueuedEmail> QueuedEmails => Set<QueuedEmail>();
         public DbSet<SendEvent> SendEvents => Set<SendEvent>();
     }
 }

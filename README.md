@@ -81,3 +81,9 @@ Configure the listener in `appsettings.json`:
 ```
 
 `AllowUnsecureAuthentication` is enabled for local development only. Production submission should use TLS before clients send credentials.
+
+Accepted SMTP messages are stored in the `QueuedEmails` table with the raw RFC822 message, SMTP envelope sender, recipients, tenant id, and delivery status. Use the API to inspect the latest queued messages:
+
+```http
+GET /api/queue
+```

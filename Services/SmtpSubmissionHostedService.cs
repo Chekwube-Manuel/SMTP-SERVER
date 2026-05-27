@@ -2,6 +2,7 @@ using EmailServer.Models;
 using Microsoft.Extensions.Options;
 using SmtpServer;
 using SmtpServer.Authentication;
+using SmtpServer.Storage;
 
 namespace EmailServer.Services
 {
@@ -10,15 +11,18 @@ namespace EmailServer.Services
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly SmtpSubmissionOptions _options;
         private readonly ILogger<SmtpSubmissionHostedService> _logger;
+        private readonly ILoggerFactory _loggerFactory;
 
         public SmtpSubmissionHostedService(
             IServiceScopeFactory scopeFactory,
             IOptions<SmtpSubmissionOptions> options,
-            ILogger<SmtpSubmissionHostedService> logger)
+            ILogger<SmtpSubmissionHostedService> logger,
+            ILoggerFactory loggerFactory)
         {
             _scopeFactory = scopeFactory;
             _options = options.Value;
             _logger = logger;
+            _loggerFactory = loggerFactory;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -37,6 +41,9 @@ namespace EmailServer.Services
 
             var services = new SmtpServer.ComponentModel.ServiceProvider();
             services.Add((IUserAuthenticator)new SmtpApiKeyAuthenticator(_scopeFactory));
+            services.Add((IMessageStore)new QueuedEmailMessageStore(
+                _scopeFactory,
+                _loggerFactory.CreateLogger<QueuedEmailMessageStore>()));
 
             var server = new SmtpServer.SmtpServer(smtpOptions, services);
 
