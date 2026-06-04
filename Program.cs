@@ -1,6 +1,7 @@
 using EmailServer.Data;
 using EmailServer.Models;
 using EmailServer.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,6 +28,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<EmailServerContext>();
     db.Database.EnsureCreated();
+    EnsureQueuedEmailDeliveryStatusColumns(db);
 }
 
 app.UseSwagger();
@@ -92,12 +94,6 @@ app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApi
 
     var sendRequest = request with { To = recipients };
 
-    var sendResult = await sender.SendAsync(tenant, sendRequest);
-    if (!sendResult)
-    {
-        return Results.StatusCode(502);
-    }
-
     var message = new EmailMessage
     {
         TenantId = tenant.Id,
@@ -111,8 +107,24 @@ app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApi
     await db.EmailMessages.AddAsync(message);
     await db.SaveChangesAsync();
 
+    var sendResult = await sender.SendAsync(tenant, sendRequest);
+    if (!sendResult.Success)
+    {
+        return Results.Json(
+            new { status = sendResult.Status, details = sendResult.Details, host = sendResult.Host },
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+
     await quotaService.RecordSendAsync(tenant, message);
-    return Results.Ok(new { message = "sent", tenantId = tenant.Id, messageId = message.Id });
+    return Results.Ok(new
+    {
+        message = "sent",
+        tenantId = tenant.Id,
+        messageId = message.Id,
+        deliveryStatus = sendResult.Status,
+        deliveryDetails = sendResult.Details,
+        deliveryHost = sendResult.Host
+    });
 });
 
 app.MapGet("/api/usage/{tenantId}", async (Guid tenantId, ITenantService service, IQuotaService quotaService) =>
@@ -138,7 +150,10 @@ app.MapGet("/api/queue", async (EmailServerContext db) =>
             message.TenantId,
             message.From,
             Recipients = message.RecipientsSerialized,
-            message.Status,
+            QueueStatus = message.Status,
+            message.DeliveryStatus,
+            message.DeliveryDetails,
+            message.LastDeliveryHost,
             message.AttemptCount,
             message.LastAttemptAt,
             message.NextAttemptAt,
@@ -151,8 +166,50 @@ app.MapGet("/api/queue", async (EmailServerContext db) =>
     return Results.Ok(messages);
 });
 
+app.MapGet("/api/queue/{messageId}", async (Guid messageId, EmailServerContext db) =>
+{
+    var message = await db.QueuedEmails
+        .Where(message => message.Id == messageId)
+        .Select(message => new
+        {
+            message.Id,
+            message.TenantId,
+            message.From,
+            Recipients = message.RecipientsSerialized,
+            QueueStatus = message.Status,
+            message.DeliveryStatus,
+            message.DeliveryDetails,
+            message.LastDeliveryHost,
+            message.AttemptCount,
+            message.LastAttemptAt,
+            message.NextAttemptAt,
+            message.SentAt,
+            message.LastError,
+            message.CreatedAt
+        })
+        .FirstOrDefaultAsync();
+
+    return message is not null ? Results.Ok(message) : Results.NotFound();
+});
+
 app.MapGet("/api/tenants", async (ITenantService service) => await service.GetTenantsAsync());
 
 app.Run();
 
-public partial class Program { }
+static void EnsureQueuedEmailDeliveryStatusColumns(EmailServerContext db)
+{
+    ExecuteSchemaUpdateIfMissing(db, "ALTER TABLE QueuedEmails ADD COLUMN DeliveryStatus TEXT NOT NULL DEFAULT 'Pending'");
+    ExecuteSchemaUpdateIfMissing(db, "ALTER TABLE QueuedEmails ADD COLUMN DeliveryDetails TEXT NULL");
+    ExecuteSchemaUpdateIfMissing(db, "ALTER TABLE QueuedEmails ADD COLUMN LastDeliveryHost TEXT NULL");
+}
+
+static void ExecuteSchemaUpdateIfMissing(EmailServerContext db, string sql)
+{
+    try
+    {
+        db.Database.ExecuteSqlRaw(sql);
+    }
+    catch (SqliteException ex) when (ex.SqliteErrorCode == 1 && ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+    {
+    }
+}

@@ -8,7 +8,7 @@ This project is a starter C# ASP.NET Core email service with multi-tenant suppor
 - Tenant creation and listing endpoints
 - Send API protected by `X-API-Key`
 - Quota tracking for daily messages
-- SMTP relay using `MailKit`
+- SMTP relay or direct MX lookup delivery using `MailKit`
 - SQLite persistence for tenants and send events
 
 ## Run locally
@@ -64,6 +64,26 @@ GET /api/usage/{tenantId}
 - The project creates `emails.db` automatically on startup
 - Use `http://localhost:5000/swagger` to explore endpoints
 
+## Outbound delivery
+
+By default, outbound mail is sent through the configured SMTP relay:
+
+```json
+"Smtp": {
+  "Host": "localhost",
+  "Port": 25,
+  "UseSsl": false,
+  "Username": "",
+  "Password": "",
+  "DefaultFrom": "no-reply@example.com",
+  "UseMxLookupDelivery": false,
+  "MxPort": 25,
+  "LocalDomain": "localhost"
+}
+```
+
+Set `UseMxLookupDelivery` to `true` to deliver directly to recipient domains. The sender resolves each domain's MX records, tries hosts in preference order with STARTTLS when available, and falls back to the domain itself if no MX record is found.
+
 ## SMTP submission
 
 The application also starts an authenticated SMTP submission listener. By default it listens on port `587` and uses the tenant API key as the SMTP password. The username is currently ignored.
@@ -88,9 +108,17 @@ Accepted SMTP messages are stored in the `QueuedEmails` table with the raw RFC82
 GET /api/queue
 ```
 
+Inspect one queued message:
+
+```http
+GET /api/queue/{messageId}
+```
+
 ## Queue worker
 
-A background worker polls queued SMTP submissions and delivers due messages through the configured outbound SMTP relay. It records successful sends in `SendEvents`, defers messages that would exceed tenant quota, and retries failed SMTP deliveries until `MaxAttempts` is reached.
+A background worker polls queued SMTP submissions and delivers due messages through the configured outbound SMTP relay or direct MX delivery. It records successful sends in `SendEvents`, defers messages that would exceed tenant quota, and retries failed SMTP deliveries until `MaxAttempts` is reached.
+
+Queued messages expose a queue status and a delivery status. Queue status tracks processing state: `Queued`, `Processing`, `Deferred`, `Sent`, or `Failed`. Delivery status tracks the current delivery outcome: `Pending`, `Attempting`, `Delivered`, `Deferred`, or `Failed`, with delivery details, last delivery host, attempt count, and next retry time.
 
 Configure the worker in `appsettings.json`:
 
@@ -99,6 +127,8 @@ Configure the worker in `appsettings.json`:
   "Enabled": true,
   "PollIntervalSeconds": 10,
   "BatchSize": 10,
-  "MaxAttempts": 5
+  "MaxAttempts": 5,
+  "InitialRetryDelaySeconds": 60,
+  "MaxRetryDelayMinutes": 60
 }
 ```
