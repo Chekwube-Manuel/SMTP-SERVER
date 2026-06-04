@@ -9,6 +9,7 @@ This project is a starter C# ASP.NET Core email service with multi-tenant suppor
 - Send API protected by `X-API-Key`
 - Quota tracking for daily messages
 - SMTP relay or direct MX lookup delivery using `MailKit`
+- DKIM signing with SPF, DKIM, and DMARC DNS guidance
 - SQLite persistence for tenants and send events
 
 ## Run locally
@@ -83,6 +84,51 @@ By default, outbound mail is sent through the configured SMTP relay:
 ```
 
 Set `UseMxLookupDelivery` to `true` to deliver directly to recipient domains. The sender resolves each domain's MX records, tries hosts in preference order with STARTTLS when available, and falls back to the domain itself if no MX record is found.
+
+## Domain authentication
+
+Each tenant gets a domain verification token and DKIM key pair. Fetch the DNS records to publish:
+
+```http
+GET /api/tenants/{tenantId}/verification
+```
+
+Publish the returned TXT records:
+
+```text
+_verify.example.com            TXT  <verification-token>
+example.com                    TXT  v=spf1 mx a -all
+mail._domainkey.example.com    TXT  v=DKIM1; k=rsa; p=<public-key>
+_dmarc.example.com             TXT  v=DMARC1; p=quarantine; adkim=s; aspf=s
+```
+
+Check whether the records are live:
+
+```http
+GET /api/tenants/{tenantId}/authentication
+POST /api/tenants/{tenantId}/authentication/verify
+```
+
+Outbound messages are DKIM signed with the tenant's selector and private key when `Dkim:Enabled` is true. By default, signing requires the tenant domain to be verified and the message `From` domain to match the tenant domain.
+
+Configure signing in `appsettings.json`:
+
+```json
+"Dkim": {
+  "Enabled": true,
+  "RequireVerifiedDomain": true,
+  "SignatureExpirationHours": 24,
+  "HeadersToSign": [
+    "From",
+    "To",
+    "Subject",
+    "Date",
+    "Message-Id",
+    "MIME-Version",
+    "Content-Type"
+  ]
+}
+```
 
 ## SMTP submission
 
