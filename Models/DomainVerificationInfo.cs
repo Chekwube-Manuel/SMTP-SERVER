@@ -11,5 +11,7 @@ namespace EmailServer.Models
         public string SpfRecordValue { get; set; } = string.Empty;
         public string DkimRecordName { get; set; } = string.Empty;
         public string DkimRecordValue { get; set; } = string.Empty;
+        public string DmarcRecordName { get; set; } = string.Empty;
+        public string DmarcRecordValue { get; set; } = string.Empty;
     }
 }
