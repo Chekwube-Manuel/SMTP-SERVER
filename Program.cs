@@ -3,6 +3,7 @@ using EmailServer.Models;
 using EmailServer.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using MimeKit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,6 +32,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<EmailServerContext>();
     db.Database.EnsureCreated();
     EnsureQueuedEmailDeliveryStatusColumns(db);
+    EnsureTenantDomainSchema(db);
 }
 
 app.UseSwagger();
@@ -48,6 +50,67 @@ app.MapGet("/api/tenants/{tenantId}", async (Guid tenantId, ITenantService servi
     return tenant is not null ? Results.Ok(tenant) : Results.NotFound();
 });
 
+app.MapGet("/api/tenants/{tenantId}/domains", async (Guid tenantId, ITenantService service) =>
+{
+    var domains = await service.GetDomainsAsync(tenantId);
+    return Results.Ok(domains.Select(domain => new
+    {
+        domain.Id,
+        domain.TenantId,
+        domain.Domain,
+        domain.IsPrimary,
+        domain.Verified,
+        domain.VerifiedAt,
+        domain.DkimSelector,
+        domain.CreatedAt
+    }));
+});
+
+app.MapPost("/api/tenants/{tenantId}/domains", async (Guid tenantId, TenantDomainCreateRequest request, ITenantService service) =>
+{
+    try
+    {
+        var domain = await service.AddDomainAsync(tenantId, request.Domain);
+        return domain is not null
+            ? Results.Created($"/api/tenants/{tenantId}/domains/{domain.Domain}", domain)
+            : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { message = ex.Message });
+    }
+});
+
+app.MapGet("/api/tenants/{tenantId}/domains/{domainName}/verification", async (Guid tenantId, string domainName, IDomainVerificationService verificationService) =>
+{
+    var info = await verificationService.GetVerificationInfoAsync(tenantId, domainName);
+    return info is not null ? Results.Ok(info) : Results.NotFound();
+});
+
+app.MapPost("/api/tenants/{tenantId}/domains/{domainName}/verification/verify", async (Guid tenantId, string domainName, IDomainVerificationService verificationService) =>
+{
+    var verified = await verificationService.VerifyDomainAsync(tenantId, domainName);
+    return verified ? Results.Ok(new { status = "verified" }) : Results.BadRequest(new { status = "failed", message = "DNS record not found or token mismatch." });
+});
+
+app.MapGet("/api/tenants/{tenantId}/domains/{domainName}/authentication", async (Guid tenantId, string domainName, IDomainVerificationService verificationService) =>
+{
+    var status = await verificationService.GetAuthenticationStatusAsync(tenantId, domainName);
+    return status is not null ? Results.Ok(status) : Results.NotFound();
+});
+
+app.MapPost("/api/tenants/{tenantId}/domains/{domainName}/authentication/verify", async (Guid tenantId, string domainName, IDomainVerificationService verificationService) =>
+{
+    var status = await verificationService.GetAuthenticationStatusAsync(tenantId, domainName);
+    if (status is null)
+    {
+        return Results.NotFound();
+    }
+
+    return status.ReadyToSendDirect
+        ? Results.Ok(status)
+        : Results.BadRequest(status);
+});
 app.MapGet("/api/tenants/{tenantId}/verification", async (Guid tenantId, IDomainVerificationService verificationService) =>
 {
     var info = await verificationService.GetVerificationInfoAsync(tenantId);
@@ -106,6 +169,12 @@ app.MapPost("/api/send", async (EmailSendRequest request, HttpContext http, IApi
     if (tenant is null)
     {
         return Results.Unauthorized();
+    }
+
+    var sendingDomain = await GetVerifiedSendingDomainAsync(tenant, request.From, tenantService);
+    if (sendingDomain is null)
+    {
+        return Results.BadRequest(new { message = "The From domain is not registered and verified for this tenant." });
     }
 
     if (!await quotaService.CanSendAsync(tenant, recipients.Count))
@@ -217,6 +286,38 @@ app.MapGet("/api/tenants", async (ITenantService service) => await service.GetTe
 
 app.Run();
 
+static async Task<TenantDomain?> GetVerifiedSendingDomainAsync(Tenant tenant, string from, ITenantService tenantService)
+{
+    if (string.IsNullOrWhiteSpace(from))
+    {
+        return null;
+    }
+
+    MailboxAddress mailbox;
+    try
+    {
+        mailbox = MailboxAddress.Parse(from);
+    }
+    catch (ParseException)
+    {
+        return null;
+    }
+
+    if (string.IsNullOrWhiteSpace(mailbox.Domain))
+    {
+        return null;
+    }
+
+    var domain = await tenantService.FindSendingDomainAsync(tenant.Id, mailbox.Domain);
+    return domain is { Verified: true } ? domain : null;
+}
+static void EnsureTenantDomainSchema(EmailServerContext db)
+{
+    db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS TenantDomains (Id TEXT NOT NULL CONSTRAINT PK_TenantDomains PRIMARY KEY, TenantId TEXT NOT NULL, Domain TEXT NOT NULL, IsPrimary INTEGER NOT NULL, Verified INTEGER NOT NULL, VerifiedAt TEXT NULL, VerificationToken TEXT NOT NULL, DkimSelector TEXT NOT NULL, DkimPublicKey TEXT NOT NULL, DkimPrivateKey TEXT NOT NULL, CreatedAt TEXT NOT NULL)");
+    db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_TenantDomains_TenantId_Domain ON TenantDomains (TenantId, Domain)");
+    db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_TenantDomains_Domain ON TenantDomains (Domain)");
+    db.Database.ExecuteSqlRaw("INSERT OR IGNORE INTO TenantDomains (Id, TenantId, Domain, IsPrimary, Verified, VerifiedAt, VerificationToken, DkimSelector, DkimPublicKey, DkimPrivateKey, CreatedAt) SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-' || '4' || substr(hex(randomblob(2)),2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))), Id, lower(trim(Domain, '.')), 1, DomainVerified, DomainVerifiedAt, VerificationToken, CASE WHEN DkimSelector = '' THEN 'mail' ELSE DkimSelector END, DkimPublicKey, DkimPrivateKey, CreatedAt FROM Tenants WHERE Domain IS NOT NULL AND Domain <> ''");
+}
 static void EnsureQueuedEmailDeliveryStatusColumns(EmailServerContext db)
 {
     ExecuteSchemaUpdateIfMissing(db, "ALTER TABLE QueuedEmails ADD COLUMN DeliveryStatus TEXT NOT NULL DEFAULT 'Pending'");
@@ -234,3 +335,12 @@ static void ExecuteSchemaUpdateIfMissing(EmailServerContext db, string sql)
     {
     }
 }
+
+
+
+
+
+
+
+
+

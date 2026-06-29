@@ -178,3 +178,18 @@ Configure the worker in `appsettings.json`:
   "MaxRetryDelayMinutes": 60
 }
 ```
+
+## Multi-domain tenants
+
+A tenant can own multiple sending domains under the same API key. Create additional domains, publish their DNS records, then verify them before sending:
+
+```http
+GET /api/tenants/{tenantId}/domains
+POST /api/tenants/{tenantId}/domains
+GET /api/tenants/{tenantId}/domains/{domainName}/verification
+POST /api/tenants/{tenantId}/domains/{domainName}/verification/verify
+GET /api/tenants/{tenantId}/domains/{domainName}/authentication
+POST /api/tenants/{tenantId}/domains/{domainName}/authentication/verify
+```
+
+API sends and SMTP submissions reject messages when the `From` domain is not registered and verified for the authenticated tenant. DKIM signing uses the matching tenant domain's selector and private key, so each tenant domain can have independent DNS authentication.

@@ -38,7 +38,7 @@ namespace EmailServer.Services
             {
                 var sender = MailboxAddress.Parse(string.IsNullOrWhiteSpace(request.From) ? _options.DefaultFrom : request.From);
                 var recipients = request.To.Select(MailboxAddress.Parse).ToList();
-                _dkimSigningService.Sign(tenant, message);
+                await _dkimSigningService.SignAsync(tenant, message);
                 return await DeliverAsync(message, sender, recipients);
             }
             catch (Exception ex)
@@ -66,7 +66,7 @@ namespace EmailServer.Services
 
                 var sender = MailboxAddress.Parse(string.IsNullOrWhiteSpace(queuedEmail.From) ? _options.DefaultFrom : queuedEmail.From);
 
-                _dkimSigningService.Sign(tenant, message);
+                await _dkimSigningService.SignAsync(tenant, message);
                 return await DeliverAsync(message, sender, recipients);
             }
             catch (Exception ex)
@@ -211,3 +211,4 @@ namespace EmailServer.Services
         }
     }
 }
+

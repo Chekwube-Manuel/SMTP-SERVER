@@ -5,6 +5,6 @@ namespace EmailServer.Services
 {
     public interface IDkimSigningService
     {
-        void Sign(Tenant tenant, MimeMessage message);
+        Task SignAsync(Tenant tenant, MimeMessage message);
     }
 }

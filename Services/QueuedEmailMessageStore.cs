@@ -31,6 +31,25 @@ namespace EmailServer.Services
                 return SmtpResponse.AuthenticationRequired;
             }
 
+            var from = $"{transaction.From.User}@{transaction.From.Host}";
+            if (string.IsNullOrWhiteSpace(transaction.From.Host))
+            {
+                return SmtpResponse.MailboxNameNotAllowed;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var tenantService = scope.ServiceProvider.GetRequiredService<ITenantService>();
+            var sendingDomain = await tenantService.FindSendingDomainAsync(tenantId, transaction.From.Host);
+            if (sendingDomain is not { Verified: true })
+            {
+                _logger.LogWarning(
+                    "Rejected SMTP message for tenant {TenantId}: From domain {FromDomain} is not registered and verified.",
+                    tenantId,
+                    transaction.From.Host);
+
+                return SmtpResponse.MailboxNameNotAllowed;
+            }
+
             var recipients = transaction.To
                 .Select(mailbox => $"{mailbox.User}@{mailbox.Host}")
                 .Where(recipient => !string.IsNullOrWhiteSpace(recipient))
@@ -45,14 +64,13 @@ namespace EmailServer.Services
             var queuedEmail = new QueuedEmail
             {
                 TenantId = tenantId,
-                From = $"{transaction.From.User}@{transaction.From.Host}",
+                From = from,
                 RecipientsSerialized = string.Join(';', recipients),
                 RawMessage = ReadMessage(buffer),
                 Status = QueuedEmailStatus.Queued,
                 CreatedAt = DateTime.UtcNow
             };
 
-            using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<EmailServerContext>();
             await db.QueuedEmails.AddAsync(queuedEmail, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);

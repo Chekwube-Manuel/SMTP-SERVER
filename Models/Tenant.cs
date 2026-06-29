@@ -21,7 +21,10 @@ namespace EmailServer.Models
         public string DkimPublicKey { get; set; } = string.Empty;
         public string DkimPrivateKey { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public ICollection<TenantDomain> Domains { get; set; } = new List<TenantDomain>();
         public ICollection<EmailMessage> Messages { get; set; } = new List<EmailMessage>();
         public ICollection<SendEvent> SendEvents { get; set; } = new List<SendEvent>();
     }
 }
+
+

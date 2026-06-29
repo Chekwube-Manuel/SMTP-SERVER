@@ -9,40 +9,63 @@ namespace EmailServer.Services
     public class DkimSigningService : IDkimSigningService
     {
         private readonly DkimOptions _options;
+        private readonly ITenantService _tenantService;
         private readonly ILogger<DkimSigningService> _logger;
 
-        public DkimSigningService(IOptions<DkimOptions> options, ILogger<DkimSigningService> logger)
+        public DkimSigningService(
+            IOptions<DkimOptions> options,
+            ITenantService tenantService,
+            ILogger<DkimSigningService> logger)
         {
             _options = options.Value;
+            _tenantService = tenantService;
             _logger = logger;
         }
 
-        public void Sign(Tenant tenant, MimeMessage message)
+        public async Task SignAsync(Tenant tenant, MimeMessage message)
         {
             if (!_options.Enabled || message.Headers.Contains(HeaderId.DkimSignature))
             {
                 return;
             }
 
-            if (!CanSignTenantDomain(tenant, message))
+            var fromDomain = message.From.Mailboxes.FirstOrDefault()?.Domain;
+            if (string.IsNullOrWhiteSpace(fromDomain))
             {
+                _logger.LogWarning("Skipping DKIM signing because the message has no mailbox From domain.");
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(tenant.DkimSelector) || string.IsNullOrWhiteSpace(tenant.DkimPrivateKey))
+            var signingDomain = await _tenantService.FindSendingDomainAsync(tenant.Id, fromDomain);
+            if (signingDomain is null)
             {
-                _logger.LogWarning("Tenant {TenantId} has no DKIM selector or private key configured.", tenant.Id);
+                _logger.LogWarning(
+                    "Skipping DKIM signing because From domain {FromDomain} is not registered for tenant {TenantId}.",
+                    fromDomain,
+                    tenant.Id);
+                return;
+            }
+
+            if (_options.RequireVerifiedDomain && !signingDomain.Verified)
+            {
+                _logger.LogWarning("Skipping DKIM signing for unverified domain {Domain}.", signingDomain.Domain);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(signingDomain.DkimSelector) || string.IsNullOrWhiteSpace(signingDomain.DkimPrivateKey))
+            {
+                _logger.LogWarning("Tenant domain {DomainId} has no DKIM selector or private key configured.", signingDomain.Id);
                 return;
             }
 
             try
             {
-                using var privateKey = new MemoryStream(Encoding.ASCII.GetBytes(ToPemPrivateKey(tenant.DkimPrivateKey)));
-                var signer = new DkimSigner(privateKey, tenant.Domain, tenant.DkimSelector, DkimSignatureAlgorithm.RsaSha256)
+                using var privateKey = new MemoryStream(Encoding.ASCII.GetBytes(ToPemPrivateKey(signingDomain.DkimPrivateKey)));
+                var signer = new DkimSigner(privateKey, signingDomain.Domain, signingDomain.DkimSelector, DkimSignatureAlgorithm.RsaSha256)
                 {
                     HeaderCanonicalizationAlgorithm = DkimCanonicalizationAlgorithm.Relaxed,
                     BodyCanonicalizationAlgorithm = DkimCanonicalizationAlgorithm.Relaxed,
-                    AgentOrUserIdentifier = $"@{tenant.Domain}"
+                    AgentOrUserIdentifier = $"@{signingDomain.Domain}"
                 };
 
                 if (_options.SignatureExpirationHours > 0)
@@ -54,38 +77,12 @@ namespace EmailServer.Services
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to DKIM sign message for tenant {TenantId} and domain {Domain}.", tenant.Id, tenant.Domain);
-            }
-        }
-
-        private bool CanSignTenantDomain(Tenant tenant, MimeMessage message)
-        {
-            if (_options.RequireVerifiedDomain && !tenant.DomainVerified)
-            {
-                _logger.LogWarning("Skipping DKIM signing for unverified domain {Domain}.", tenant.Domain);
-                return false;
-            }
-
-            var fromDomain = message.From.Mailboxes.FirstOrDefault()?.Domain;
-            if (string.IsNullOrWhiteSpace(fromDomain))
-            {
-                _logger.LogWarning("Skipping DKIM signing because the message has no mailbox From domain.");
-                return false;
-            }
-
-            var matchesTenantDomain =
-                string.Equals(fromDomain, tenant.Domain, StringComparison.OrdinalIgnoreCase) ||
-                fromDomain.EndsWith($".{tenant.Domain}", StringComparison.OrdinalIgnoreCase);
-
-            if (!matchesTenantDomain)
-            {
                 _logger.LogWarning(
-                    "Skipping DKIM signing because From domain {FromDomain} does not match tenant domain {Domain}.",
-                    fromDomain,
-                    tenant.Domain);
+                    ex,
+                    "Failed to DKIM sign message for tenant {TenantId} and domain {Domain}.",
+                    tenant.Id,
+                    signingDomain.Domain);
             }
-
-            return matchesTenantDomain;
         }
 
         private List<string> GetHeadersToSign()
